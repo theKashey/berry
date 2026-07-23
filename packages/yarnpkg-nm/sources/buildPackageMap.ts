@@ -138,6 +138,17 @@ const buildPackageMapFromDependencyFilter = (nodeModulesTree: NodeModulesTree, {
     }
   }
 
+  const registerDependency = (dependencies: Map<string, string>, dependencyName: string, dependencyLocation: PortablePath) => {
+    if (dependencies.has(dependencyName))
+      return;
+
+    const dependency = packageMapNodes.get(dependencyLocation);
+    if (typeof dependency === `undefined`)
+      throw new Error(`Assertion failed: Expected ${dependencyLocation} to have been registered`);
+
+    dependencies.set(dependencyName, dependency.id);
+  };
+
   const getPackageDependencies = (packagePath: PortablePath, dependencyNames: Set<string> | null) => {
     const dependencies = new Map<string, string>();
 
@@ -147,18 +158,25 @@ const buildPackageMapFromDependencyFilter = (nodeModulesTree: NodeModulesTree, {
       const packageLocations = packageLocationsByNodeModulesPath.get(nodeModulesPath);
 
       if (typeof packageLocations !== `undefined`) {
-        for (const [dependencyName, dependencyLocation] of packageLocations) {
-          if (dependencyNames !== null && !dependencyNames.has(dependencyName))
-            continue;
-
-          if (dependencies.has(dependencyName))
-            continue;
-
-          const dependency = packageMapNodes.get(dependencyLocation);
-          if (typeof dependency === `undefined`)
-            throw new Error(`Assertion failed: Expected ${dependencyLocation} to have been registered`);
-
-          dependencies.set(dependencyName, dependency.id);
+        // When the dependency set is known (pnp map), iterate the package's own
+        // dependencies (typically a handful) and look each one up in the level
+        // map. This avoids scanning every package hoisted at this node_modules
+        // level, which is O(levelSize) per package and quadratic overall for
+        // large monorepos where most packages hoist to the root node_modules.
+        //
+        // When the dependency set is unknown (loose map), fall back to scanning
+        // the whole level, since every visible package is a candidate.
+        if (dependencyNames !== null) {
+          for (const dependencyName of dependencyNames) {
+            const dependencyLocation = packageLocations.get(dependencyName);
+            if (typeof dependencyLocation !== `undefined`) {
+              registerDependency(dependencies, dependencyName, dependencyLocation);
+            }
+          }
+        } else {
+          for (const [dependencyName, dependencyLocation] of packageLocations) {
+            registerDependency(dependencies, dependencyName, dependencyLocation);
+          }
         }
       }
 
